@@ -1,0 +1,262 @@
+/*
+*******************************************************************************************
+*
+* DELL PROPRIETARY INFORMATION
+*
+* This software is confidential.  Dell Inc., or one of its subsidiaries, has supplied this
+* software to you under the terms of a license agreement,nondisclosure agreement or both.
+* You may not copy, disclose, or use this software except in accordance with those terms.
+*
+* Copyright 2023 Dell Inc. or its subsidiaries.  All Rights Reserved.
+*
+* DELL INC. MAKES NO REPRESENTATIONS OR WARRANTIES ABOUT THE SUITABILITY OF THE SOFTWARE,
+* EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.
+* DELL SHALL NOT BE LIABLE FOR ANY DAMAGES SUFFERED BY LICENSEE AS A RESULT OF USING,
+* MODIFYING OR DISTRIBUTING THIS SOFTWARE OR ITS DERIVATIVES.
+*
+*******************************************************************************************
+*
+*/
+
+//===========================================================================
+//
+//  File Name:    Setup.rul
+//
+//  Description:  Blank setup main script file
+//
+//  Comments:     Blank setup is an empty setup project. If you want to
+//				  create a new project via. step-by step instructions use the
+//				  Project Assistant.
+//
+//===========================================================================
+
+
+// Included header files ----------------------------------------------------
+#include "ifx.h"
+#include "Globals.h"
+#include "CustomFunctions.rul"
+
+// Definitions for License file
+
+#define LICENSE_PATH SUPPORTDIR ^ "DellEndUserLicenseAgreement.txt"
+#define TITLE "Dell End User License Agreement"
+
+
+//---------------------------------------------------------------------------                                                                        
+// OnFirstUIBefore
+//
+// First Install UI Sequence - Before Move Data
+//
+// The OnFirstUIBefore event is called by OnShowUI when the setup is
+// running in first install mode. By default this event displays UI allowing
+// the end user to specify installation parameters.
+//
+// Note: This event will not be called automatically in a
+// program...endprogram style setup.
+//---------------------------------------------------------------------------
+function OnFirstUIBefore()
+    number  nResult, nLevel, nSize, nSetupType;
+    string  szTitle, szMsg, szOpt1, szOpt2, szLicenseFile;
+    string  szName, szCompany, szTargetPath, szDir, szFeatures;
+    BOOL    bLicenseAccepted;
+begin	
+	TRACE("INSIDE FirstUIBefore", __FILE__, __LINE__);
+    // Added in InstallShield 15 - Show an appropriate error message if
+    // -removeonly is specified and the product is not installed.
+    if( REMOVEONLY ) then
+        Disable( DIALOGCACHE );
+		szMsg = SdLoadString( IDS_IFX_ERROR_PRODUCT_NOT_INSTALLED_UNINST );
+   		SdSubstituteProductInfo( szMsg );
+		MessageBox( szMsg, SEVERE );
+		abort;
+    endif;
+   
+    nSetupType = COMPLETE;	
+    szDir = TARGETDIR;
+    szName = "";
+    szCompany = "Dell";
+    bLicenseAccepted = FALSE;
+    
+    if(g_bvSilent) then
+		TRACE("Silent Installation", __FILE__, __LINE__);
+		goto skipUI;
+	endif;
+	
+// Beginning of UI Sequence
+Dlg_Start:
+    nResult = 0;
+
+Dlg_SdWelcome:
+    szTitle = "";
+    szMsg = "";
+    //{{IS_SCRIPT_TAG(Dlg_SdWelcome)
+    nResult = SdWelcome( szTitle, szMsg );
+    //}}IS_SCRIPT_TAG(Dlg_SdWelcome)
+    if (nResult = BACK) goto Dlg_Start;
+	
+	//Dell EULA
+	if (SdLicense2(TITLE, "", "", LICENSE_PATH, FALSE) = NEXT) then
+		//MessageBox ("Continue with the installation.", INFORMATION);
+	else
+		goto Dlg_SdWelcome;
+	endif;
+
+Dlg_SdStartCopy2:
+    szTitle = "";
+    szMsg = "";
+    //{{IS_SCRIPT_TAG(Dlg_SdStartCopy2)	
+    nResult = SdStartCopy2( szTitle, szMsg );	
+    if (nResult = BACK) goto Dlg_Start;
+    // Added in 11.0 - Set appropriate StatusEx static text.
+    SetStatusExStaticText( SdLoadString( IDS_IFX_STATUSEX_STATICTEXT_FIRSTUI ) );
+    
+    skipUI:
+    TRACE("Ending UI portion", __FILE__, __LINE__);
+ 
+    return 0;
+end;
+
+
+//---------------------------------------------------------------------------
+// OnBegin
+//
+// The OnBegin event is called directly by the framework after the setup
+// initializes. Note that this event will be called AFTER "Initialization"
+// events (i.e.) OnSetTARGETDIR, OnCheckMediaPassword.
+//
+// Note: This event will not be called automatically in a
+// program...endprogram style setup.
+//---------------------------------------------------------------------------
+function OnBegin()
+begin
+    // TODO: Perform custom initialization steps, check requirements, etc.
+    
+    
+    //CitrixVersionValidation();
+    
+    CheckIfSilentInstallation();
+    PreReqValidation();
+    if(g_bvSilent=FALSE && CMDLINE!="") then
+		TRACE("Wrong CMDLINE: " +CMDLINE, __FILE__, __LINE__);
+		abort;
+    endif;
+    
+end;
+
+//---------------------------------------------------------------------------
+// OnMoveData
+//
+// The OnMoveData event is called by OnShowUI to initiate the file
+// transfer of the setup.
+//
+// Note: This event will not be called automatically in a
+// program...endprogram style setup.
+//---------------------------------------------------------------------------
+function OnMoveData()
+number	nResult, nMediaFlags;
+begin
+
+	// Don't install the DISK1COMPONENT if MAINT_OPTION_NONE was specified.
+	if( MAINT_OPTION = MAINT_OPTION_NONE ) then
+		FeatureSelectItem( MEDIA, DISK1COMPONENT, FALSE );
+	endif;
+
+    // Updated in 11.5, disable the cancel button during file transfer unless
+	// this is non-maintenance mode or repair mode.
+    if( MAINTENANCE && ( !REINSTALLMODE || UPDATEMODE ) ) then
+        Disable( CANCELBUTTON );
+    endif;
+
+    // Show Status
+	// Note: Start status window at 1 in case CreateInstallationInfo call
+	// is lengthy.
+	if(g_bvSilent = FALSE) then
+		SetStatusWindow( 1, "" );
+		Enable( STATUSEX );
+		StatusUpdate( ON, 100 );
+	endif;
+
+	// Create the uninstall infomation (after displaying the progress dialog)
+	// Don't create uninstall information if MAINT_OPTION_NONE was specified.
+	if( MAINT_OPTION != MAINT_OPTION_NONE ) then
+		CreateInstallationInfo();
+	endif;
+
+	// Move Data
+	nResult = FeatureTransferData( MEDIA );
+	
+    // Moved in 11.0, Check for failure before creating uninstall key.
+    // Handle move data error and abort if error occured.
+	if( nResult < ISERR_SUCCESS ) then
+		OnComponentError();
+		abort;
+	endif;	    
+	
+	
+	TriggerInstaller();
+	
+	// Create uninstall key, if DISK1COMPONENT was installed.
+	if( IFX_DISK1INSTALLED ) then
+
+		// Store text-subs for maintenance mode later, only do this when
+		// disk 1 is installed. Note that any text-subs that are updated after
+        // this call will not be remembered during maintenance mode.
+		FeatureSaveTarget("");
+
+		// Write uninstall information.
+		MaintenanceStart();
+
+		// Customize Uninstall Information
+		OnCustomizeUninstInfo();
+
+	endif;
+
+    // Disable Status
+	Disable( STATUSEX );
+
+end;
+
+//---------------------------------------------------------------------------
+// OnFirstUIAfter
+//
+// First Install UI Sequence - After Move Data
+//
+// The OnFirstUIAfter event called by OnShowUI after the file transfer
+// of the setup when the setup is running in first install mode. By default
+// this event displays UI that informs the end user that the setup has been
+// completed successfully.
+//
+// Note: This event will not be called automatically in a
+// program...endprogram style setup.
+//---------------------------------------------------------------------------
+function OnFirstUIAfter()
+    STRING szTitle, szMsg1, szMsg2, szOpt1, szOpt2, szCmd, szDir;
+    NUMBER bvOpt1, bvOpt2, nRet;
+begin
+
+    	if(g_bvSilent = FALSE) then
+		ShowObjWizardPages(NEXT);
+		
+		szTitle = "";
+		szMsg1 = ""; 
+		szMsg2 = "";
+		szOpt1 = "";
+		szOpt2 = "";
+		bvOpt1   = FALSE;
+		bvOpt2   = FALSE;    
+		
+		//{{IS_SCRIPT_TAG(Dlg_SdDinishEx)	
+		if ( BATCH_INSTALL ) then
+			SdFinishReboot ( szTitle , szMsg1 , SYS_BOOTMACHINE , szMsg2 , 0 );
+		else
+			SdFinish ( szTitle , szMsg1 , szMsg2 , szOpt1 , szOpt2 , bvOpt1 , bvOpt2 );
+		endif;
+		//}}IS_SCRIPT_TAG(Dlg_SdDinishEx)	
+	endif;
+	ChangeDirectory(szDir);
+	DeleteDir(TARGETDIR, ALLCONTENTS);
+	TRACE("Deleted extracted files" , __FILE__, __LINE__);
+	Enable(WOW64FSREDIRECTION);
+	TRACE("End All Functions", __FILE__, __LINE__);
+end;

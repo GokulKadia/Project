@@ -1,0 +1,192 @@
+/*
+*******************************************************************************************
+*
+* DELL PROPRIETARY INFORMATION
+*
+* This software is confidential.  Dell Inc., or one of its subsidiaries, has supplied this
+* software to you under the terms of a license agreement,nondisclosure agreement or both.
+* You may not copy, disclose, or use this software except in accordance with those terms.
+*
+* Copyright 2020 Dell Inc. or its subsidiaries.  All Rights Reserved.
+*
+* DELL INC. MAKES NO REPRESENTATIONS OR WARRANTIES ABOUT THE SUITABILITY OF THE SOFTWARE,
+* EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED WARRANTIES OF
+* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, OR NON-INFRINGEMENT.
+* DELL SHALL NOT BE LIABLE FOR ANY DAMAGES SUFFERED BY LICENSEE AS A RESULT OF USING,
+* MODIFYING OR DISTRIBUTING THIS SOFTWARE OR ITS DERIVATIVES.
+*
+*******************************************************************************************
+*
+*/
+
+#define INSTALL_LOGFILE "CWALauncher.log"
+#define UNINSTALL_LOGFILE "CWALauncher.log"
+
+STRING g_svTraceFile;
+
+//prototype RunStart();
+prototype void PreReqValidation();
+prototype VOID TriggerInstaller();
+prototype VOID TRACE( STRING , STRING, NUMBER);
+prototype VOID CheckIfSilentInstallation();
+
+function VOID CheckIfSilentInstallation()
+STRING szConfigFile, szCmdLine, szPath;
+begin
+
+	TRACE("Running Action: CheckIfSilentInstallation", __FILE__, __LINE__);
+	g_bvSilent = FALSE;	
+	szCmdLine = CMDLINE;
+	TRACE("Command line parameter is:"+szCmdLine, __FILE__, __LINE__);
+	if(StrCompare(szCmdLine, "--silent")==0) then
+		TRACE("Setup is launched in silent mode, -Install", __FILE__, __LINE__);
+		g_bvSilent = TRUE;
+	endif;
+	if(StrCompare(szCmdLine, "/?")==0) then
+		TRACE("Setup is checking for Help Commands", __FILE__, __LINE__);
+		MessageBox("The Silent Installation Parameter is --silent", INFORMATION);
+		abort;
+	endif;
+	TRACE("Completed Action: CheckIfSilentInstallation", __FILE__, __LINE__);
+	
+end; 
+
+function VOID PreReqValidation()
+STRING szCmd,szDir, szProg,szKey,svCurrentVersion,szCmdLine,szRegKey,szValue, svPID, szKey1;
+NUMBER nRet,nSize,nvType,nResultVal,nvSize,NUMName1,NUMName2;
+begin
+	//OS Validation
+	OSVersion=FALSE;
+	TRACE("Start OSValidation", __FILE__, __LINE__);
+	Disable(WOW64FSREDIRECTION);
+	RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+	if((SYSINFO.nOSMajor == 10) && (SYSINFO.nOSMinor == 0) && (SYSINFO.nOSProductType = VER_NT_WORKSTATION)) then
+		TRACE("Windows 10 OS", __FILE__, __LINE__);
+		OSVersion= TRUE;
+	endif;
+	
+	// WDA Validation
+	Disable(WOW64FSREDIRECTION);
+	RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+	szKey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{C8FEC19B-21C3-4FD7-8921-0021FF938CB5}";
+	nSize=256;
+	nvType = REGDB_STRING;
+	nResultVal=RegDBKeyExist(szKey);
+	//MessageBox(szKey, INFORMATION);
+	//TRACE("WDA RegKey exist or not - " + nResultVal , __FILE__, __LINE__);
+	if(nResultVal == 0) then
+		TRACE("WDA is not installed", __FILE__, __LINE__);
+		if(g_bvSilent == TRUE) then
+			abort;
+		else
+			MessageBox("Please install WDA and reinstall the software!", SEVERE);
+			abort;
+		endif;
+	else
+		TRACE("WDA is installed", __FILE__, __LINE__);
+	endif;
+	
+	// CWA Validation
+	Disable(WOW64FSREDIRECTION);
+	RegDBSetDefaultRoot(HKEY_LOCAL_MACHINE);
+	szKey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{284C6FCC-753A-41E0-AF81-9F08D82C4998}";
+	nSize=256;
+	nvType = REGDB_STRING;
+	nResultVal=RegDBKeyExist(szKey);
+	if(nResultVal == 0) then
+		TRACE("CWA is not installed", __FILE__, __LINE__);
+		if(g_bvSilent == TRUE) then
+			abort;
+		else
+			MessageBox("Please install CWA and reinstall the software!", SEVERE);
+			abort;
+		endif;
+	else
+		TRACE("CWA is installed", __FILE__, __LINE__);
+	endif;
+end;
+
+
+function VOID TriggerInstaller()
+STRING szCmd;
+NUMBER nRet;
+begin
+	Disable(WOW64FSREDIRECTION);
+	ChangeDirectory(TARGETDIR);
+	if(CMDLINE="") then
+		TRACE("Manual Installation",__FILE__,__LINE__);
+		szCmd = "/c CWALauncher.cmd";
+		LAAW_SHELLEXECUTEVERB = "runas";
+		nRet = LaunchAppAndWait("cmd.exe", szCmd ,LAAW_OPTION_HIDDEN|LAAW_OPTION_WAIT|LAAW_OPTION_USE_SHELLEXECUTE);
+		//MessageBox("batchScript executed", INFORMATION);
+		TRACE("CWALauncher Application Copied", __FILE__, __LINE__);
+		Delay(02);
+	elseif(g_bvSilent=TRUE) then
+		TRACE("Silent Installation",__FILE__,__LINE__);	
+		szCmd = "/c CWALauncher.cmd";
+		LAAW_SHELLEXECUTEVERB = "runas";
+		nRet = LaunchAppAndWait("cmd.exe", szCmd ,LAAW_OPTION_HIDDEN|LAAW_OPTION_WAIT|LAAW_OPTION_USE_SHELLEXECUTE);
+		TRACE("CWALauncher Application Copied", __FILE__, __LINE__);
+		Delay(02);
+	endif;
+	Enable(WOW64FSREDIRECTION);
+end;
+
+function VOID TRACE( szInfo, szFile, nLine  )
+	NUMBER nResult, nTraceFile,nFileHandle;
+	STRING szResult, szLine, szKey, szTraceDir, szJustFile, szTime, szDate;
+	LIST strDateList;
+	STRING szDay, szYear, szMonth;
+begin
+	ParsePath (szJustFile,szFile, FILENAME_ONLY);
+	
+	nTraceFile = -1;
+    OpenFileMode (FILE_MODE_APPEND);
+   
+    szTraceDir = "C:\\Wyse\\WAPPS\\";
+    
+	if(MAINTENANCE) then
+		if (OpenFile (nTraceFile, szTraceDir, UNINSTALL_LOGFILE ) < 0) then
+			if (CreateFile(nTraceFile, szTraceDir, UNINSTALL_LOGFILE ) < 0) then
+				nTraceFile = -1;
+			endif;
+		endif;
+	else
+		if (OpenFile (nTraceFile, szTraceDir, INSTALL_LOGFILE ) < 0) then
+			if (CreateFile(nTraceFile, szTraceDir, INSTALL_LOGFILE ) < 0) then
+				nTraceFile = -1;
+			endif;
+		endif;
+	endif;
+    
+    if (nTraceFile != -1) then
+		if (GetSystemInfo (TIME, nResult, szTime) < 0) then
+			szTime = "TIME ERROR";
+		endif;
+		if (GetSystemInfo (DATE, nResult, szDate) < 0) then
+			szDate = "DATE ERROR";
+		endif;
+		NumToStr( szLine, nLine );
+		
+		strDateList = ListCreate(STRINGLIST);
+		StrGetTokens(strDateList, szDate, "-");
+		ListGetFirstString(strDateList, szMonth);
+		ListGetNextString(strDateList, szDay);
+		ListGetNextString(strDateList, szYear);
+		szDate = szYear + "-" + szMonth + "-" + szDay;
+		szDate = szDate+" T"+szTime;
+
+		szResult = szDate + "::" + szJustFile + "::" + szLine + "::" + szInfo ;
+		//szResult = szDate + "::" + szInfo ;
+		WriteLine( nTraceFile, szResult );
+		
+		CloseFile( nTraceFile );
+		
+		if(MAINTENANCE)then
+			g_svTraceFile = szTraceDir ^ UNINSTALL_LOGFILE;
+		else
+			g_svTraceFile = szTraceDir ^ INSTALL_LOGFILE;
+		endif;
+		
+    endif;
+end;
